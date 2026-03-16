@@ -2,4 +2,6 @@ streamlit
 numpy
 librosa
 soundfile
+scipy
 streamlit-audiorecorder
+matplotlib
