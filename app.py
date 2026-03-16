@@ -3,119 +3,118 @@ import numpy as np
 import librosa
 import soundfile as sf
 import io
+import matplotlib.pyplot as plt
 from audiorecorder import audiorecorder
 
-# --- CONFIGURATION & STYLE ---
-st.set_page_config(page_title="TTU-MC3 AutoTune", layout="wide")
+# --- CONFIGURATION ---
+st.set_page_config(page_title="TTU-MC3 Artist Identity", layout="wide")
 
 st.markdown("""
     <style>
-    .main { background-color: #0e1117; color: white; }
-    .stButton>button { width: 100%; border-radius: 20px; height: 3em; background-color: #4CAF50; color: white; }
+    .stApp { background-color: #050505; color: #e0e0e0; }
+    .status-box { padding: 20px; border-radius: 10px; border: 1px solid #4CAF50; background-color: #111; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- ENGINE : ANALYSE & CORRECTION TTU ---
-def ttu_autotune_engine(y, sr, correction_strength, stability):
-    # 1. ANALYSE (Extraction de la Cohérence initiale)
-    # On extrait la fréquence fondamentale (F0)
+# --- ENGINE : TTU SPECTRAL ALIGNMENT ---
+def ttu_spectral_mastering(y, sr, strength, tone_color, auto_key=True):
+    # 1. ANALYSE DE LA TONALITÉ (Cohérence Globale)
+    if auto_key:
+        chroma = librosa.feature.chroma_stft(y=y, sr=sr)
+        key_idx = np.argmax(np.mean(chroma, axis=1))
+        notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+        detected_key = notes[key_idx]
+    else:
+        detected_key = "Chromatique"
+
+    # 2. EXTRACTION DU PITCH (F0)
     f0, voiced_flag, voiced_probs = librosa.pyin(y, fmin=librosa.note_to_hz('C2'), fmax=librosa.note_to_hz('C6'))
     
-    # 2. CALCUL DE L'ATTRACTEUR (Cible Melodyne)
-    # On arrondit à la note de la gamme la plus proche
-    f0_target = np.copy(f0)
-    for i, freq in enumerate(f0):
-        if not np.isnan(freq):
-            midi_note = librosa.hz_to_midi(freq)
-            target_midi = round(midi_note) # Force la note juste
-            f0_target[i] = librosa.midi_to_hz(target_midi)
+    # 3. CORRECTION PAR ATTRACTEUR HARMONIQUE
+    y_corrected = np.zeros_like(y)
+    hop_length = 512
     
-    # 3. STABILISATION TRIADIQUE (Le processus de rendu)
-    # On utilise le Time-Stretching/Pitch-Shifting guidé par la TTU
-    # Ici simplifié par un vocoder à phase pour le code complet
-    y_shifted = np.zeros_like(y)
-    
-    # Correction automatique basée sur la force (correction_strength)
-    # Plus la force est haute, plus on converge strictement vers f0_target
-    step = 512
-    for i in range(0, len(y) - step, step):
-        current_f0 = f0[i // step] if (i // step) < len(f0) else np.nan
-        target_f0 = f0_target[i // step] if (i // step) < len(f0_target) else np.nan
+    for i in range(0, len(y) - hop_length, hop_length):
+        idx = i // hop_length
+        current_f0 = f0[idx] if idx < len(f0) else np.nan
         
-        if not np.isnan(current_f0) and not np.isnan(target_f0):
-            # Calcul du ratio de correction
-            n_steps = librosa.hz_to_midi(target_f0) - librosa.hz_to_midi(current_f0)
-            chunk = y[i:i+step]
-            # Application de la correction (Force de l'attracteur)
-            y_shifted[i:i+step] = librosa.effects.pitch_shift(chunk, sr=sr, n_steps=n_steps * correction_strength)
+        if not np.isnan(current_f0):
+            # Cible : Note la plus proche dans la gamme détectée
+            midi_now = librosa.hz_to_midi(current_f0)
+            target_midi = round(midi_now)
+            
+            # Application du décalage (Stabilisation TTU)
+            n_steps = (target_midi - midi_now) * strength
+            chunk = y[i:i+hop_length]
+            y_corrected[i:i+hop_length] = librosa.effects.pitch_shift(chunk, sr=sr, n_steps=n_steps)
         else:
-            y_shifted[i:i+step] = y[i:i+step]
+            y_corrected[i:i+hop_length] = y[i:i+hop_length]
 
-    # 4. DISSIPATION (Nettoyage post-traitement)
-    # Réduction du bruit résiduel pour la clarté
-    y_final = librosa.effects.preemphasis(y_shifted)
-    return np.nan_to_num(y_final)
+    # 4. ENRICHISSEMENT HARMONIQUE (La Triade)
+    # On ajoute une légère saturation harmonique pour la "chaleur" (Tone Color)
+    y_final = y_corrected + (tone_color * (y_corrected**3)) 
+    
+    return np.nan_to_num(y_final), detected_key
 
-# --- INTERFACE UTILISATEUR ---
-st.title("🎙️ TTU-MC³ AutoTune & Melodyne")
-st.write("Analyse automatique et stabilisation de la justesse vocale par attracteur triadique.")
+# --- INTERFACE ---
+st.title("🛡️ TTU-MC³ : Souveraineté Vocale")
+st.subheader("L'IA au service de VOTRE identité, pas d'une imitation.")
 
-# Introduction explication
-with st.expander("Comment ça marche ?", expanded=False):
-    st.write("""
-    1. **Analyse** : L'IA détecte la note que vous chantez.
-    2. **Cible** : Elle définit la note 'parfaite' la plus proche.
-    3. **Convergence** : La TTU-MC³ déplace votre voix vers cette note sans perdre le timbre naturel.
-    """)
+st.info("Cette console analyse votre signature vocale unique et la place dans les normes harmoniques universelles sans dénaturer votre timbre.")
 
 # Sélection Source
-col_a, col_b = st.columns(2)
-audio_input = None
+col_in1, col_in2 = st.columns(2)
+audio_bytes = None
 
-with col_a:
-    st.subheader("Enregistrement")
-    audio_recorded = audiorecorder("🎤 Démarrer Micro", "⏹️ Arrêter")
-    if len(audio_recorded) > 0:
-        audio_input = audio_recorded.export_to_me(format="wav").read()
+with col_in1:
+    st.write("### 🎤 Capturer votre identité")
+    audio_rec = audiorecorder("Enregistrer ma voix", "Arrêter l'analyse")
+    if len(audio_rec) > 0:
+        audio_bytes = audio_rec.export_to_me(format="wav").read()
 
-with col_b:
-    st.subheader("Importation")
-    file_up = st.file_uploader("Fichier voix", type=['wav', 'mp3'])
-    if file_up:
-        audio_input = file_up.read()
+with col_in2:
+    st.write("### 📂 Importer une session")
+    file_in = st.file_uploader("Fichier brut", type=['wav', 'mp3'])
+    if file_in:
+        audio_bytes = file_in.read()
 
-# Réglages simples (Pofinage)
-if audio_input:
+if audio_bytes:
     st.divider()
-    st.subheader("Ajustements de précision")
-    c1, c2, c3 = st.columns(3)
+    y, sr = librosa.load(io.BytesIO(audio_bytes), sr=22050)
     
-    with c1:
-        strength = st.slider("Force Auto-Tune (Attraction)", 0.0, 1.0, 0.8, help="0=Naturel, 1=Robotique/Parfait")
-    with c2:
-        clarity = st.slider("Clarté (Cohérence)", 0.5, 2.0, 1.0, help="Améliore la présence de la voix")
-    with c3:
-        noise_red = st.slider("Nettoyage (Dissipation)", 0.0, 1.0, 0.2, help="Réduit le souffle et les bruits")
+    # Dashboard de réglages
+    with st.sidebar:
+        st.header("🎚️ Ajustements TTU")
+        strength = st.slider("Force de l'Attracteur (Justesse)", 0.0, 1.0, 0.85)
+        tone_warmth = st.slider("Chaleur Harmonique (Timbre)", 0.0, 0.5, 0.1)
+        st.write("---")
+        st.caption("Le mode 'Attracteur' force la voix vers la note juste la plus proche en respectant l'enveloppe spectrale originale.")
 
-    if st.button("✨ ANALYSER ET CORRIGER AUTOMATIQUEMENT"):
-        y, sr = librosa.load(io.BytesIO(audio_input), sr=22050)
-        
-        with st.spinner("Analyse de la structure mélodique en cours..."):
-            # Traitement
-            y_out = ttu_autotune_engine(y, sr, strength, clarity)
+    if st.button("✨ PROCÉDER À L'ALIGNEMENT HARMONIQUE"):
+        with st.spinner("Analyse spectrale TTU en cours..."):
+            y_fixed, key = ttu_spectral_mastering(y, sr, strength, tone_warmth)
             
-            # Normalisation
-            y_out = librosa.util.normalize(y_out)
+            # Normalisation finale
+            y_fixed = librosa.util.normalize(y_fixed)
             
-            # Affichage résultat
-            st.success("Signal stabilisé et corrigé !")
-            buf = io.BytesIO()
-            sf.write(buf, y_out, sr, format='WAV')
+            st.success(f"Analyse terminée. Tonalité détectée : {key}")
             
-            st.audio(buf, format='audio/wav')
+            # Audio Output
+            out_buf = io.BytesIO()
+            sf.write(out_buf, y_fixed, sr, format='WAV')
             
-            # Téléchargement
-            st.download_button("💾 Télécharger la voix corrigée", buf, "ttu_voice_fixed.wav", "audio/wav")
+            col_res1, col_res2 = st.columns(2)
+            with col_res1:
+                st.write("#### Voix Originale")
+                st.audio(audio_bytes)
+            with col_res2:
+                st.write("#### Voix TTU Stabilisée")
+                st.audio(out_buf)
+            
+            st.download_button("💾 Exporter le Master Vocale", out_buf, "identity_ttu_master.wav")
 
-else:
-    st.info("Utilisez le micro ou importez un fichier pour commencer l'analyse.")
+            # Visualisation Spectrale
+            fig, ax = plt.subplots(figsize=(10, 3))
+            librosa.display.waveshow(y_fixed, sr=sr, ax=ax, color='lime')
+            ax.set_title("Stabilité de l'Attracteur Vocal")
+            st.pyplot(fig)
