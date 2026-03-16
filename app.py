@@ -3,103 +3,110 @@ import numpy as np
 import librosa
 import soundfile as sf
 import io
-try:
-    import matplotlib.pyplot as plt
-except ImportError:
-    st.error("Matplotlib est manquant. Ajoutez 'matplotlib' à votre requirements.txt")
+from audiorecorder import audiorecorder # Installation: pip install streamlit-audiorecorder
 
-from audiorecorder import audiorecorder
+# Configuration
+st.set_page_config(page_title="TTU-MC3 Mini DAW", layout="wide")
 
-# --- CONFIGURATION ---
-st.set_page_config(page_title="TTU-MC3 Artist Identity", layout="wide")
-
-st.markdown("""
-    <style>
-    .stApp { background-color: #050505; color: #e0e0e0; }
-    .stButton>button { background-color: #2e7d32; color: white; border-radius: 10px; }
-    </style>
-    """, unsafe_allow_html=True)
-
-# --- MOTEUR TTU-MC3 ADVANCED ---
-def process_voice_identity(y, sr, strength, warmth):
-    # 1. ANALYSE (Extraction de l'identité fréquentielle)
-    # On utilise pyin pour une détection de pitch haute précision
-    f0, voiced_flag, voiced_probs = librosa.pyin(y, 
-                                                 fmin=librosa.note_to_hz('C2'), 
-                                                 fmax=librosa.note_to_hz('C6'))
+# --- INTRODUCTION ---
+st.title("🎙️ TTU-MC³ Voice Processor & Mini DAW")
+with st.expander("📖 Qu'est-ce que la TTU-MC³ ? (Explications)", expanded=True):
+    st.write("""
+    Cette application traite le son selon la **Théorie Triadique Unifiée (TTU-MC³)**. 
+    Contrairement aux outils classiques, nous ne filtrons pas le son : nous simulons un système physique 
+    qui cherche à se stabiliser vers un **attracteur de clarté**.
     
-    # 2. ALIGNEMENT (Attracteur vers la note juste)
-    y_corrected = np.zeros_like(y)
-    hop_length = 512
+    * **Mémoire ($\Phi_M$)** : Gère l'inertie et la texture (le "corps" du son).
+    * **Cohérence ($\Phi_C$)** : Gère la synchronisation des phases (la "clarté").
+    * **Dissipation ($\Phi_D$)** : Gère l'élimination du désordre (le "nettoyage").
+    """)
+
+# --- INTERFACE DE CAPTURE ---
+st.header("1. Source Audio")
+col_input1, col_input2 = st.columns(2)
+
+audio_data = None
+sr = 22050
+
+with col_input1:
+    st.subheader("Enregistrement Direct")
+    st.write("Microphone (Ordinateur ou Smartphone)")
+    # Composant pour enregistrer directement
+    audio_recorded = audiorecorder("Cliquer pour Enregistrer", "Cliquer pour Arrêter")
     
-    for i in range(0, len(y) - hop_length, hop_length):
-        idx = i // hop_length
-        f0_current = f0[idx] if idx < len(f0) else np.nan
+    if len(audio_recorded) > 0:
+        audio_data = audio_recorded.export_to_me(format="wav").read()
+        st.success("Enregistrement micro capturé !")
+
+with col_input2:
+    st.subheader("Fichier Local")
+    uploaded_file = st.file_uploader("Importer un fichier (WAV, MP3)", type=['wav', 'mp3'])
+    if uploaded_file:
+        audio_data = uploaded_file.read()
+
+# --- MOTEUR DE TRAITEMENT ---
+def apply_ttu_processing(y, sr, alpha, beta, gamma, lmbda, eta, mu):
+    phi_m, phi_c, phi_d = 0.0, 0.0, 0.1
+    dt = 1/sr
+    y_out = np.zeros_like(y)
+    
+    for i in range(len(y)):
+        v_t = y[i]
+        # Équations du flot triadique (système différentiel)
+        dpm = -alpha * phi_m + beta * phi_d
+        dpc = gamma * v_t - lmbda * phi_c * phi_d
+        dpd = eta * phi_c**2 - mu * phi_d
         
-        if not np.isnan(f0_current) and voiced_flag[idx]:
-            # Calcul de la note cible (Melodyne style)
-            midi_note = librosa.hz_to_midi(f0_current)
-            target_midi = round(midi_note)
-            n_steps = (target_midi - midi_note) * strength
-            
-            # Correction par décalage de phase (préserve le timbre)
-            chunk = y[i:i+hop_length]
-            y_corrected[i:i+hop_length] = librosa.effects.pitch_shift(chunk, sr=sr, n_steps=n_steps)
-        else:
-            y_corrected[i:i+hop_length] = y[i:i+hop_length]
+        phi_m += dpm * dt
+        phi_c += dpc * dt
+        phi_d += dpd * dt
+        
+        # Le signal est extrait de la composante Cohérence stabilisée
+        y_out[i] = phi_c * (1.0 - 0.05 * phi_d)
+        
+    return np.nan_to_num(y_out)
 
-    # 3. CHALEUR HARMONIQUE (MC3 : Cohérence & Dissipation)
-    # Ajout d'une saturation douce pour simuler un préampli à lampe
-    y_final = y_corrected + (warmth * np.tanh(y_corrected * 2))
+# --- COMMANDES DE TESTS ---
+if audio_data:
+    st.header("2. Paramétrage & Mixage")
     
-    return librosa.util.normalize(y_final)
-
-# --- INTERFACE ---
-st.title("🎙️ TTU-MC³ : Souveraineté Vocale")
-st.write("### Transformez votre voix brute en un Master professionnel tout en restant VOUS-MÊME.")
-
-# Zone de capture
-col1, col2 = st.columns(2)
-audio_source = None
-
-with col1:
-    st.info("🎤 Enregistrement Direct")
-    audio_rec = audiorecorder("Démarrer l'enregistrement", "Arrêter")
-    if len(audio_rec) > 0:
-        audio_source = audio_rec.export_to_me(format="wav").read()
-
-with col2:
-    st.info("📂 Importation Studio")
-    file_up = st.file_uploader("Fichier vocal (.wav, .mp3)", type=['wav', 'mp3'])
-    if file_up:
-        audio_source = file_up.read()
-
-if audio_source:
-    st.divider()
-    y, sr = librosa.load(io.BytesIO(audio_source), sr=22050)
-    
-    # Réglages
     with st.sidebar:
-        st.header("🎚️ Paramètres d'Identité")
-        strength = st.slider("Précision (Attraction)", 0.0, 1.0, 0.8)
-        warmth = st.slider("Chaleur (Harmoniques)", 0.0, 0.5, 0.1)
-        st.caption("La 'Précision' ramène votre voix vers la note parfaite sans robotiser le grain.")
+        st.header("Commandes de Test TTU")
+        st.info("""
+        🧪 **Recettes de test :**
+        - **Nettoyer** : ↑ Mu , ↓ Beta
+        - **Percer** : ↑ Gamma , Ajuster Lambda
+        - **Épaissir** : ↓ Alpha (Inertie)
+        - **Expérimenter** : ↑↑ Eta (Saturation)
+        """)
+        
+        alpha = st.slider("Alpha (Mémoire)", 0.01, 5.0, 1.0)
+        beta = st.slider("Beta (Réinjection)", 0.0, 1.0, 0.1)
+        gamma = st.slider("Gamma (Cohérence)", 0.1, 10.0, 1.5)
+        lmbda = st.slider("Lambda (Couplage)", 0.1, 5.0, 1.0)
+        eta = st.slider("Eta (Non-linéarité)", 0.1, 10.0, 1.0)
+        mu = st.slider("Mu (Dissipation)", 0.1, 10.0, 1.0)
 
-    if st.button("✨ GÉNÉRER LE MASTER TTU"):
-        with st.spinner("Stabilisation de la signature vocale..."):
-            y_output = process_voice_identity(y, sr, strength, warmth)
+    # Chargement du signal
+    y, sr_loaded = librosa.load(io.BytesIO(audio_data), sr=sr)
+    
+    if st.button("🚀 Appliquer le traitement TTU-MC³"):
+        with st.spinner("Calcul de l'attracteur sonore..."):
+            y_processed = apply_ttu_processing(y, sr_loaded, alpha, beta, gamma, lmbda, eta, mu)
             
-            # Export
-            out_buf = io.BytesIO()
-            sf.write(out_buf, y_output, sr, format='WAV')
+            # Normalisation pour éviter les saturations numériques
+            max_val = np.max(np.abs(y_processed))
+            if max_val > 0:
+                y_processed = y_processed / max_val
             
-            st.success("Master terminé !")
-            st.audio(out_buf, format='audio/wav')
+            # Affichage résultat
+            st.subheader("Résultat Final")
+            out_buffer = io.BytesIO()
+            sf.write(out_buffer, y_processed, sr_loaded, format='WAV')
+            st.audio(out_buffer, format='audio/wav')
             
-            # Visualisation
-            fig, ax = plt.subplots(figsize=(10, 2))
-            ax.plot(y_output[:2000], color='#2e7d32')
-            ax.set_axis_off()
-            st.pyplot(fig)
-            
-            st.download_button("💾 Télécharger le Master", out_buf, "ttu_artist_master.wav")
+            # Comparaison visuelle
+            st.line_chart({"Original": y[:1000], "TTU-MC3": y_processed[:1000]})
+
+else:
+    st.info("En attente d'une source audio (micro ou fichier)...")
